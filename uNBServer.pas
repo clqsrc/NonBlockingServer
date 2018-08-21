@@ -87,11 +87,18 @@ type
     //不抛出异常的
     function Read(var Buffer; Count: Integer; Socket: TSocket; ConnectID:Integer): Longint;
 
+    //读取一行,\n 为结束符//先简单实现,以后再写 blockread 的 fast 版本,其实这个也不会太慢
+    function ReadLine(var line:AnsiString; Socket:TSocket; ConnectID:Integer):Boolean;
+
+
     //发送一个缓冲区 //接口同流的 WriteBuffer
     procedure SendBuffer(const Buffer; Count: Longint; Socket: TSocket; ConnectID:Integer);
     //发送一个流 //接口同流的 WriteStream
     procedure SendStream(AStream: TMemoryStream; Socket: TSocket; ConnectID:Integer);
-
+    //发送一个字符串
+    function SendString(s:AnsiString; Socket: TSocket; ConnectID:Integer):Boolean;
+    //发送一行字符串
+    function SendLine(s:AnsiString; Socket: TSocket; ConnectID:Integer):Boolean;
 
     //与 indy 不同的是 ReadBuffer,Read 之后的数据不需要的话要手工清理//似乎不太好,最好加个标志让用户选择是否手工清理
     procedure ClearReadData(Socket: TSocket; ConnectID:Integer);
@@ -604,6 +611,56 @@ begin
 
 end;
 
+//读取一行,\n 为结束符//先简单实现,以后再写 blockread 的 fast 版本,其实这个也不会太慢
+function TNBServer.ReadLine(var line:AnsiString; Socket:TSocket; ConnectID:Integer):Boolean;
+var
+  s:TMemoryStream;
+  c:Char;
+  len:Integer;
+  r,i,max_len:Integer;
+  Connect:NBSConnect;
+begin
+  max_len := 1024 * 100; //目前最多读取 100k
+
+  line := ''; len := 0;
+  Result := False;
+
+  if GetConnect(ConnectID, Connect)=False then Exit;
+
+  s := self.Conncts[ConnectID].RecvStream;  
+
+  Connect.RecvStream.Seek(0, soFromBeginning);//确保跳到缓冲区最前
+
+  for i := 0 to max_len do
+  begin
+
+    r := self.Read(c, 1, Socket, ConnectID);
+
+    if r<>1 then Exit;
+    len := len + 1;
+    
+    if c = #13 then Continue; //这个字符不存,但要加入到长度中
+    if c = #10 then
+    begin
+      Result := True;
+      Break;
+    end;
+
+    line := line + c;
+    //len := len + 1;
+  end;
+
+  //s := self.Conncts[ConnectID].RecvStream;
+
+  if Result = True then
+    ClearData_Fun(s, len); //读取成功才清理,因为有可能后面还有数据
+    
+  //ClearData_Fun(s, s.Position);
+  //server.ClearReadData(Socket, ConnectID); //读取到完整包后应当清除读取的数据,否则下次又读取到旧数据了
+
+  Result := True;
+end;
+
 
 //用户读取数据
 //与 indy OnExecute 中 ReadBuffer 类似的接口//indy 是一定会读取完的,这个接口则要读取多次,返回成功时才表示完成了
@@ -642,6 +699,7 @@ var
   Connect:NBSConnect;
 
 begin
+  Result := 0; // 2017-11-13 11:22:57 应该给个默认值,虽然 delphi 可能会自己给
   if GetConnect(ConnectID, Connect)=False then Exit;
 
   s := self.Conncts[ConnectID].RecvStream;
@@ -666,6 +724,35 @@ begin
   Connect.SendStream.WriteBuffer(Buffer, Count);
 
 end;
+
+//发送一个字符串
+function TNBServer.SendString(s:AnsiString; Socket: TSocket; ConnectID:Integer):Boolean;
+var
+  //s:TMemoryStream;
+
+  r:Integer;
+
+  Connect:NBSConnect;
+
+begin
+  Result := False;
+
+  if GetConnect(ConnectID, Connect)=False then Exit;
+
+  Connect.SendStream.Seek(0, soFromEnd);//确保跳到缓冲区最末尾
+  //Connect.SendStream.WriteBuffer(Buffer, Count);
+  Connect.SendStream.WriteBuffer((@s[1])^, Length(s));
+
+  Result := True;
+end;
+
+//发送一行字符串
+function TNBServer.SendLine(s:AnsiString; Socket: TSocket; ConnectID:Integer):Boolean;
+begin
+
+  Result := self.SendString(s+#13#10, Socket, ConnectID);
+end;
+
 
 //发送一个流 //接口同流的 WriteStream
 procedure TNBServer.SendStream(AStream: TMemoryStream; Socket: TSocket; ConnectID:Integer);
